@@ -8,6 +8,7 @@ import path from 'path';
 import type { JsonObject } from 'swagger-ui-express';
 import validator from 'validator';
 
+import { ResponseError } from '@/errors/response-errors/abstract/response.error';
 import { License } from '@/license';
 import { PublicApiKeyService } from '@/services/public-api-key.service';
 import { UrlService } from '@/services/url.service';
@@ -155,18 +156,30 @@ function createApiRouter(
 		createLazyValidatorMiddleware(openApiSpecPath, handlersDirectory, version),
 	);
 
-	apiController.use(
-		(
-			error: HttpError,
-			_req: express.Request,
-			res: express.Response,
-			_next: express.NextFunction,
-		) => {
-			res.status(error.status || 400).json({
+	const publicApiErrorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
+		// n8n domain errors (NotFoundError, ForbiddenError, etc.)
+		if (error instanceof ResponseError) {
+			res.status(error.httpStatusCode).json({
 				message: error.message,
 			});
-		},
-	);
+			return;
+		}
+
+		// OpenAPI validation errors (express-openapi-validator)
+		if ('status' in error && typeof (error as HttpError).status === 'number') {
+			res.status((error as HttpError).status || 400).json({
+				message: error instanceof Error ? error.message : 'Bad request',
+			});
+			return;
+		}
+
+		// Unknown errors — don't leak internals
+		res.status(500).json({
+			message: 'Internal server error',
+		});
+	};
+
+	apiController.use(publicApiErrorHandler);
 
 	return apiController;
 }
